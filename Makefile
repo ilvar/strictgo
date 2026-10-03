@@ -1,8 +1,10 @@
-.PHONY: check test fmt
+.PHONY: check thorough test fmt
 check:
 	go vet ./...
 	go test ./...
 	go run . check .
+thorough:
+	go run . thorough .
 test:
 	go test ./...
 fmt:

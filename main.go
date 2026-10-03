@@ -1,13 +1,11 @@
-// strictgo: capability
 package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/ilvar/strictgo/internal/capability"
 )
 
 const help = `strictgo — strict Go feedback loop for coding agents
@@ -23,7 +21,8 @@ INSTALL
 COMMANDS
   strictgo --help                 Print this manual (-h and command --help work too).
   strictgo check [PATH]           Check a Go module; PATH defaults to .
-  strictgo fix [PATH]             Apply gofmt edits and re-check.
+  strictgo fix [PATH]             Apply validated suggested fixes and re-check.
+  strictgo thorough [PATH]        Run check, full tests, race tests, and bounded fuzzing.
   strictgo new <NAME>             Create a Go project in the current directory.
   strictgo install-skills         Install the bundled Codex/Claude Code skill.
   strictgo [PATH]                 Alias for strictgo check PATH.
@@ -31,13 +30,14 @@ COMMANDS
 AGENT WORKFLOW
   Inspect the project, make a small coherent edit, run strictgo check PATH,
   address every error in its JSON report, then run go test ./... and inspect
-  the final diff. Use strictgo fix PATH for deterministic gofmt edits.
+  the final diff. Use strictgo fix PATH for validated mechanical edits.
 
 OUTPUT CONTRACT
   Operational commands write one JSON document to stdout. Help is plain text.
   Reports contain ok, error_count, warning_count, and diagnostics. Diagnostics
   are sorted by file, line, column, code, and message. An optional at field
-  gives file, positions, and source snippet. Operational failures also return
+  gives file, positions, and source snippet. Safe suggestions include fixes
+  with byte-offset edits. Operational failures also return
   a JSON report. Human details may be written to stderr.
 
 EXIT STATUS
@@ -50,16 +50,16 @@ STRICT SUBSET
   strictgo::no_panic             Avoid panic outside tests; return errors.
   strictgo::no_dot_import        Name imported packages explicitly.
   strictgo::no_mutable_global    Avoid package-level variables outside tests.
-  strictgo::must_handle          Handle results of known error-returning calls.
+  strictgo::must_handle          Handle error-returning calls or explicitly discard.
   strictgo::capability_boundary  Keep filesystem, network, and process access
-                                 in a file marked // strictgo: capability
-                                 immediately before its package declaration.
+                                 in a dedicated package named capability.
 
 CHECKS AND FIXES
-  strictgo combines gofmt, go vet, a compile-only go test run, and the strict
-  subset above. It does not run the test bodies. Its fix command applies only
-  deterministic gofmt output; other diagnostics need a source edit. Go tool
-  diagnostics are reported without invented replacement text.
+  strictgo combines gofmt, package/type analysis, go vet, a compile-only go
+  test run, and the strict subset above. It respects Go build constraints.
+  fix applies gofmt and typed dot-import suggestions, validates edits, and
+  re-checks. thorough runs full tests, race tests, and each fuzz target for
+  two seconds. Go tool diagnostics never carry invented replacement text.
 
 SKILL INSTALLATION
   Installs SKILL.md to ~/.agents/skills/strictgo and/or
@@ -77,12 +77,23 @@ type Location struct {
 	End     Position `json:"end"`
 	Snippet string   `json:"snippet"`
 }
+type Edit struct {
+	File        string `json:"file"`
+	StartByte   int    `json:"start_byte"`
+	EndByte     int    `json:"end_byte"`
+	Replacement string `json:"replacement"`
+}
+type Fix struct {
+	Message string `json:"message"`
+	Edits   []Edit `json:"edits"`
+}
 type Diagnostic struct {
 	Level   string    `json:"level"`
 	Source  string    `json:"source"`
 	Code    string    `json:"code"`
 	Message string    `json:"message"`
 	At      *Location `json:"at,omitempty"`
+	Fixes   []Fix     `json:"fixes,omitempty"`
 }
 type Report struct {
 	OK           bool         `json:"ok"`
@@ -91,20 +102,20 @@ type Report struct {
 	Diagnostics  []Diagnostic `json:"diagnostics"`
 }
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() { capability.Exit(run(capability.Args())) }
 func run(args []string) int {
 	if len(args) == 0 {
 		args = []string{"check", "."}
 	}
 	for _, a := range args {
 		if a == "--help" || a == "-h" || a == "help" {
-			fmt.Print(help)
+			_, _ = fmt.Print(help)
 			return 0
 		}
 	}
 	command := args[0]
 	switch command {
-	case "check", "fix":
+	case "check", "fix", "thorough":
 		if len(args) > 2 {
 			return failure("usage: strictgo " + command + " [PATH]")
 		}
@@ -112,7 +123,13 @@ func run(args []string) int {
 		if len(args) == 2 {
 			path = args[1]
 		}
-		r, err := check(path, command == "fix")
+		var r Report
+		var err error
+		if command == "thorough" {
+			r, err = thorough(path)
+		} else {
+			r, err = check(path, command == "fix")
+		}
 		if err != nil {
 			return failure(err.Error())
 		}
@@ -158,31 +175,18 @@ func emit(r Report) {
 	if r.Diagnostics == nil {
 		r.Diagnostics = []Diagnostic{}
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(r)
+	data, err := json.Marshal(r)
+	if err != nil {
+		capability.Stderr(err.Error())
+		return
+	}
+	if err := capability.Stdout(append(data, '\n')); err != nil {
+		capability.Stderr(err.Error())
+	}
 }
 func failure(message string) int {
 	emit(Report{Diagnostics: []Diagnostic{{Level: "error", Source: "strictgo", Code: "strictgo::operation", Message: message}}})
-	_, _ = fmt.Fprintln(os.Stderr, message)
+	capability.Stderr(message)
 	return 2
 }
-func moduleRoot(path string) (string, error) {
-	root, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", errors.New("project path is not a directory")
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
-	}
-	if _, err = os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		return "", fmt.Errorf("no go.mod in %s", root)
-	}
-	return root, nil
-}
+func moduleRoot(path string) (string, error) { return capability.ModuleRoot(path) }
