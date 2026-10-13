@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+func TestHelpDocumentsReleaseInstaller(t *testing.T) {
+	for _, fragment := range []string{"install.sh", "STRICTGO_VERSION", "STRICTGO_INSTALL_DIR", "STRICTGO_BUILD_FROM_SOURCE", "macOS", "source builds"} {
+		if !strings.Contains(help, fragment) {
+			t.Errorf("installer manual is missing %q", fragment)
+		}
+	}
+}
+
 func moduleFixture(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()

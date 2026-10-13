@@ -15,6 +15,14 @@ PURPOSE
   profile and a deterministic check → fix → re-check interface.
 
 INSTALL
+  Latest checksummed Linux/macOS x64/ARM64 installer: download install.sh from
+  https://raw.githubusercontent.com/ilvar/strictgo/main/install.sh and run bash install.sh.
+  STRICTGO_VERSION=0.1.0 (or v0.1.0) pins downloads and source builds;
+  unset, empty, or latest selects the latest release. STRICTGO_INSTALL_DIR
+  changes ~/.local/bin; STRICTGO_BUILD_FROM_SOURCE=1 forces a build.
+  Unsupported architectures build the selected tag. Source builds require Go (Go 1.21+ can download the pinned Go 1.26.0 toolchain).
+  Runtime dependencies: Go 1.26+. No download/checksum failure is ignored.
+
   go install github.com/ilvar/strictgo@latest
   strictgo install-skills
 

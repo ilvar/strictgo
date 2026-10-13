@@ -4,6 +4,26 @@
 
 ## Install
 
+Install the latest release into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ilvar/strictgo/main/install.sh -o /tmp/strictgo-install.sh
+bash /tmp/strictgo-install.sh
+```
+
+The installer downloads a checksummed Linux or macOS binary for x64 or ARM64.
+`STRICTGO_VERSION=0.1.0` (or `v0.1.0`) pins a release; unset, empty, or `latest`
+selects the latest release. `STRICTGO_INSTALL_DIR=/your/bin` changes the destination.
+`STRICTGO_BUILD_FROM_SOURCE=1` forces a source build. Other architectures build
+from the same selected tag. Source builds require Go (Go 1.21+ can download the pinned Go 1.26.0 toolchain).
+Runtime dependencies: Go 1.26+. Download or checksum failures stop installation
+without replacing an existing binary. Binary installation needs a published
+release; pinned source builds only need a Git tag.
+
+CI publishes Linux/macOS x64/ARM64 binaries and checksums after the existing
+validation gates pass. Bump `VERSION` to publish a new release. Existing releases are never overwritten.
+Installer regression tests run with `python3 tests/test_installer.py`.
+
 ```sh
 go install github.com/ilvar/strictgo@latest
 strictgo install-skills

@@ -1,5 +1,13 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -12,3 +20,88 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go run . thorough .
+
+  installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/test_installer.py
+      - run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - run: shellcheck --norc --shell=bash --enable=all install.sh
+  build:
+    needs: [check, installer]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build and smoke test native binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o "dist/strictgo-$GOOS-$GOARCH" .
+          "dist/strictgo-$GOOS-$GOARCH" --help >/dev/null
+          cd dist
+          if [ "$RUNNER_OS" = macOS ]; then
+            shasum -a 256 "strictgo-$GOOS-$GOARCH" >"strictgo-$GOOS-$GOARCH.sha256"
+          else
+            sha256sum "strictgo-$GOOS-$GOARCH" >"strictgo-$GOOS-$GOARCH.sha256"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strictgo-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+  release:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: strictgo-*
+          path: dist
+          merge-multiple: true
+      - name: Publish new manifest version
+        run: |
+          version=$(cat VERSION)
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; leaving its binaries unchanged. Bump VERSION for a new release."
+            exit 0
+          fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            tag_commit=$(git rev-parse "$tag^{commit}")
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              echo "Unreleased tag $tag points to a different commit; bump the version instead of replacing it." >&2
+              exit 1
+            fi
+          fi
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "strictgo $version" --generate-notes --latest

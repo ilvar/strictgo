@@ -1,2 +1,4 @@
 /strictgo
 /coverage.out
+/dist/
+__pycache__/
